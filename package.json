@@ -1,14 +1,27 @@
 {
-  "name": "broadcast",
+  "name": "live-streaming-server",
   "version": "1.0.0",
-  "description": "",
+  "description": "Node.js server for live streaming",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
-    "ws": "^8.13.0"
+    "cors": "^2.8.5",
+    "express": "^4.17.1",
+    "socket.io": "^4.0.0"
   },
-  "author": "",
+  "devDependencies": {
+    "nodemon": "^2.0.7"
+  },
+  "keywords": [
+    "live",
+    "streaming",
+    "webrtc",
+    "socket.io",
+    "node.js"
+  ],
+  "author": "Your Name",
   "license": "ISC"
 }
