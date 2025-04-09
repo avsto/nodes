@@ -17,7 +17,6 @@ app.use(express.json());
 
 io.on('connection', (socket) => {
   let room_id;
-  let role;
 
   socket.on('joinRoom', (data) => {
     room_id = data.room_id;
@@ -25,17 +24,8 @@ io.on('connection', (socket) => {
     console.log(`Socket ${socket.id} joined room ${room_id}`);
   });
 
-  socket.on('broadcaster', () => {
-    role = 'broadcaster';
-  });
-
-  socket.on('viewer', () => {
-    role = 'viewer';
-  });
-
   socket.on('message', (message) => {
-    const data = JSON.parse(message);
-    io.to(room_id).emit('message', data);
+    io.to(room_id).emit('message', message);
   });
 
   socket.on('disconnect', () => {
