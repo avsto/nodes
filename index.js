@@ -1,76 +1,98 @@
-// signaling-server.js
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8080 });
+const http = require('http');
 
-const rooms = {}; // { roomId: { broadcaster, viewers: [] } }
-const viewerMap = new Map();
+const server = http.createServer();
+const wss = new WebSocket.Server({ server });
 
-wss.on('connection', (ws) => {
-    let roomId = null;
-    let isBroadcaster = false;
+const rooms = {}; // room_id => { broadcaster: ws, viewers: Set<ws> }
 
-    ws.on('message', (message) => {
-        const data = JSON.parse(message);
+wss.on('connection', (ws, req) => {
+  const urlParts = req.url.split('/');
+  const roomId = urlParts[urlParts.length - 1];
+  console.log(`New connection for room: ${roomId}`);
 
-        switch (data.type) {
-            case 'broadcaster-join':
-                roomId = data.roomId;
-                isBroadcaster = true;
-                if (!rooms[roomId]) rooms[roomId] = { broadcaster: ws, viewers: [] };
-                rooms[roomId].broadcaster = ws;
-                console.log(`Broadcaster joined room ${roomId}`);
-                break;
+  if (!rooms[roomId]) {
+    rooms[roomId] = { broadcaster: null, viewers: new Set() };
+  }
 
-            case 'viewer-join':
-                roomId = data.roomId;
-                isBroadcaster = false;
-                if (!rooms[roomId]) rooms[roomId] = { broadcaster: null, viewers: [] };
-                rooms[roomId].viewers.push(ws);
-                viewerMap.set(ws, roomId);
-                console.log(`Viewer joined room ${roomId}`);
+  ws.on('message', (message) => {
+    let data;
 
-                if (rooms[roomId].broadcaster) {
-                    rooms[roomId].broadcaster.send(JSON.stringify({ type: 'viewer-joined' }));
-                }
-                break;
+    try {
+      data = JSON.parse(message);
+    } catch (e) {
+      console.error('Invalid JSON:', e);
+      return;
+    }
 
-            case 'offer':
-                const lastViewer = rooms[roomId]?.viewers.at(-1);
-                if (lastViewer) {
-                    lastViewer.send(JSON.stringify({ type: 'offer', offer: data.offer }));
-                }
-                break;
+    const { type } = data;
 
-            case 'answer':
-                rooms[roomId]?.broadcaster?.send(JSON.stringify({ type: 'answer', answer: data.answer }));
-                break;
+    if (type === 'broadcaster-join') {
+      rooms[roomId].broadcaster = ws;
+      ws.isBroadcaster = true;
+      console.log(`Broadcaster joined room ${roomId}`);
+    }
 
-            case 'candidate':
-                if (isBroadcaster) {
-                    rooms[roomId]?.viewers.forEach(v =>
-                        v.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }))
-                    );
-                } else {
-                    rooms[roomId]?.broadcaster?.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
-                }
-                break;
+    if (type === 'viewer-join') {
+      rooms[roomId].viewers.add(ws);
+      ws.isViewer = true;
+      console.log(`Viewer joined room ${roomId}`);
 
-            default:
-                console.log('Unknown message type:', data.type);
+      // Notify broadcaster a viewer joined
+      const broadcaster = rooms[roomId].broadcaster;
+      if (broadcaster && broadcaster.readyState === WebSocket.OPEN) {
+        broadcaster.send(JSON.stringify({ type: 'viewer-join' }));
+      }
+    }
+
+    if (type === 'offer') {
+      const viewers = rooms[roomId].viewers;
+      viewers.forEach(viewer => {
+        if (viewer.readyState === WebSocket.OPEN) {
+          viewer.send(JSON.stringify({ type: 'offer', offer: data.offer }));
         }
-    });
+      });
+    }
 
-    ws.on('close', () => {
-        if (!roomId) return;
-        if (isBroadcaster) {
-            console.log(`Broadcaster left room ${roomId}`);
-            rooms[roomId].broadcaster = null;
-        } else {
-            rooms[roomId].viewers = rooms[roomId].viewers.filter(v => v !== ws);
-            viewerMap.delete(ws);
-            console.log(`Viewer left room ${roomId}`);
+    if (type === 'answer') {
+      const broadcaster = rooms[roomId].broadcaster;
+      if (broadcaster && broadcaster.readyState === WebSocket.OPEN) {
+        broadcaster.send(JSON.stringify({ type: 'answer', answer: data.answer }));
+      }
+    }
+
+    if (type === 'candidate') {
+      if (ws.isBroadcaster) {
+        // Send ICE candidate to all viewers
+        rooms[roomId].viewers.forEach(viewer => {
+          if (viewer.readyState === WebSocket.OPEN) {
+            viewer.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
+          }
+        });
+      } else if (ws.isViewer) {
+        const broadcaster = rooms[roomId].broadcaster;
+        if (broadcaster && broadcaster.readyState === WebSocket.OPEN) {
+          broadcaster.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
         }
-    });
+      }
+    }
+  });
+
+  ws.on('close', () => {
+    console.log('Client disconnected');
+    if (ws.isViewer) {
+      rooms[roomId]?.viewers.delete(ws);
+    }
+    if (ws.isBroadcaster) {
+      rooms[roomId]?.viewers.forEach(viewer => {
+        viewer.close(); // close all viewers if broadcaster disconnects
+      });
+      delete rooms[roomId]; // clean up room
+    }
+  });
 });
 
-console.log('Signaling server running on ws://localhost:8080');
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => {
+  console.log(`Signaling server is running on port ${PORT}`);
+});
