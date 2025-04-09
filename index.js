@@ -1,11 +1,8 @@
+// server.js
 const WebSocket = require('ws');
-const http = require('http');
+const wss = new WebSocket.Server({ port: 8080 }); // You can change the port as needed
 
-const port = process.env.PORT || 8080;
-const server = http.createServer();
-const wss = new WebSocket.Server({ server });
-
-const rooms = {}; // room_id: { broadcaster: ws, viewers: Set<ws> }
+const rooms = {};
 
 wss.on('connection', (ws, req) => {
     let currentRoom = null;
@@ -15,95 +12,63 @@ wss.on('connection', (ws, req) => {
         try {
             const data = JSON.parse(message);
 
-            // Room is part of URL path, e.g. /room123
-            const url = req.url; // e.g. "/room123"
-            const roomId = url.split('/')[1];
-            if (!roomId) return;
+            if (data.type === 'viewer-join' || data.type === 'broadcaster-join') {
+                currentRoom = data.roomId;
+                role = data.type === 'viewer-join' ? 'viewer' : 'broadcaster';
 
-            currentRoom = roomId;
-
-            // Room setup
-            if (!rooms[roomId]) {
-                rooms[roomId] = { broadcaster: null, viewers: new Set() };
-            }
-
-            // Role assignment
-            if (data.type === 'broadcaster-join') {
-                role = 'broadcaster';
-                rooms[roomId].broadcaster = ws;
-                console.log(`🎥 Broadcaster joined room ${roomId}`);
-            }
-
-            if (data.type === 'viewer-join') {
-                role = 'viewer';
-                rooms[roomId].viewers.add(ws);
-                console.log(`👤 Viewer joined room ${roomId}`);
-            }
-
-            // Forward offer/answer/candidate between broadcaster & viewer
-            if (data.type === 'offer' && role === 'broadcaster') {
-                for (let viewer of rooms[roomId].viewers) {
-                    viewer.send(JSON.stringify({ type: 'offer', offer: data.offer }));
+                if (!rooms[currentRoom]) {
+                    rooms[currentRoom] = { broadcaster: null, viewers: [] };
                 }
-            }
 
-            if (data.type === 'answer' && role === 'viewer') {
-                if (rooms[roomId].broadcaster) {
-                    rooms[roomId].broadcaster.send(JSON.stringify({ type: 'answer', answer: data.answer }));
+                if (role === 'broadcaster') {
+                    rooms[currentRoom].broadcaster = ws;
+                } else {
+                    rooms[currentRoom].viewers.push(ws);
                 }
+
+                // Notify broadcaster if viewer joins
+                if (role === 'viewer' && rooms[currentRoom].broadcaster) {
+                    rooms[currentRoom].broadcaster.send(JSON.stringify({ type: 'viewer-joined' }));
+                }
+
+                return;
             }
 
+            // Offer from broadcaster to viewer
+            if (data.type === 'offer' && currentRoom) {
+                const viewer = rooms[currentRoom].viewers.find(v => v !== ws && v.readyState === WebSocket.OPEN);
+                viewer?.send(JSON.stringify({ type: 'offer', offer: data.offer }));
+            }
+
+            // Answer from viewer to broadcaster
+            if (data.type === 'answer' && currentRoom) {
+                rooms[currentRoom].broadcaster?.send(JSON.stringify({ type: 'answer', answer: data.answer }));
+            }
+
+            // ICE Candidate
             if (data.type === 'candidate') {
                 if (role === 'broadcaster') {
-                    for (let viewer of rooms[roomId].viewers) {
-                        viewer.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
-                    }
+                    rooms[currentRoom].viewers.forEach(v => v.send(JSON.stringify({ type: 'candidate', candidate: data.candidate })));
                 } else if (role === 'viewer') {
-                    if (rooms[roomId].broadcaster) {
-                        rooms[roomId].broadcaster.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
-                    }
+                    rooms[currentRoom].broadcaster?.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
                 }
             }
+
         } catch (err) {
-            console.error('Failed to process message:', err);
+            console.error('Message parse error:', err);
         }
     });
 
     ws.on('close', () => {
-        if (!currentRoom) return;
-
-        if (role === 'broadcaster') {
-            console.log(`❌ Broadcaster left room ${currentRoom}`);
-            for (let viewer of rooms[currentRoom].viewers) {
-                viewer.send(JSON.stringify({ type: 'host-left' }));
-                viewer.close();
+        if (currentRoom && rooms[currentRoom]) {
+            if (role === 'viewer') {
+                rooms[currentRoom].viewers = rooms[currentRoom].viewers.filter(v => v !== ws);
             }
-            rooms[currentRoom].broadcaster = null;
-            rooms[currentRoom].viewers.clear();
-        }
-
-        if (role === 'viewer') {
-            console.log(`👋 Viewer left room ${currentRoom}`);
-            rooms[currentRoom].viewers.delete(ws);
-        }
-
-        // Cleanup room if empty
-        if (
-            rooms[currentRoom] &&
-            !rooms[currentRoom].broadcaster &&
-            rooms[currentRoom].viewers.size === 0
-        ) {
-            delete rooms[currentRoom];
-            console.log(`🧹 Cleaned up empty room: ${currentRoom}`);
+            if (role === 'broadcaster') {
+                rooms[currentRoom].broadcaster = null;
+            }
         }
     });
 });
 
-server.on('request', (req, res) => {
-    res.writeHead(200);
-    res.end("WebRTC signaling server running.");
-});
-
-server.listen(port, () => {
-    console.log(`🚀 WebSocket signaling server running on port ${port}`);
-});
+console.log('Signaling server is running on ws://localhost:8080');
