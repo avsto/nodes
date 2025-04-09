@@ -1,74 +1,76 @@
-// server.js
+// signaling-server.js
 const WebSocket = require('ws');
-const wss = new WebSocket.Server({ port: 8080 }); // You can change the port as needed
+const wss = new WebSocket.Server({ port: 8080 });
 
-const rooms = {};
+const rooms = {}; // { roomId: { broadcaster, viewers: [] } }
+const viewerMap = new Map();
 
-wss.on('connection', (ws, req) => {
-    let currentRoom = null;
-    let role = null;
+wss.on('connection', (ws) => {
+    let roomId = null;
+    let isBroadcaster = false;
 
     ws.on('message', (message) => {
-        try {
-            const data = JSON.parse(message);
+        const data = JSON.parse(message);
 
-            if (data.type === 'viewer-join' || data.type === 'broadcaster-join') {
-                currentRoom = data.roomId;
-                role = data.type === 'viewer-join' ? 'viewer' : 'broadcaster';
+        switch (data.type) {
+            case 'broadcaster-join':
+                roomId = data.roomId;
+                isBroadcaster = true;
+                if (!rooms[roomId]) rooms[roomId] = { broadcaster: ws, viewers: [] };
+                rooms[roomId].broadcaster = ws;
+                console.log(`Broadcaster joined room ${roomId}`);
+                break;
 
-                if (!rooms[currentRoom]) {
-                    rooms[currentRoom] = { broadcaster: null, viewers: [] };
+            case 'viewer-join':
+                roomId = data.roomId;
+                isBroadcaster = false;
+                if (!rooms[roomId]) rooms[roomId] = { broadcaster: null, viewers: [] };
+                rooms[roomId].viewers.push(ws);
+                viewerMap.set(ws, roomId);
+                console.log(`Viewer joined room ${roomId}`);
+
+                if (rooms[roomId].broadcaster) {
+                    rooms[roomId].broadcaster.send(JSON.stringify({ type: 'viewer-joined' }));
                 }
+                break;
 
-                if (role === 'broadcaster') {
-                    rooms[currentRoom].broadcaster = ws;
+            case 'offer':
+                const lastViewer = rooms[roomId]?.viewers.at(-1);
+                if (lastViewer) {
+                    lastViewer.send(JSON.stringify({ type: 'offer', offer: data.offer }));
+                }
+                break;
+
+            case 'answer':
+                rooms[roomId]?.broadcaster?.send(JSON.stringify({ type: 'answer', answer: data.answer }));
+                break;
+
+            case 'candidate':
+                if (isBroadcaster) {
+                    rooms[roomId]?.viewers.forEach(v =>
+                        v.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }))
+                    );
                 } else {
-                    rooms[currentRoom].viewers.push(ws);
+                    rooms[roomId]?.broadcaster?.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
                 }
+                break;
 
-                // Notify broadcaster if viewer joins
-                if (role === 'viewer' && rooms[currentRoom].broadcaster) {
-                    rooms[currentRoom].broadcaster.send(JSON.stringify({ type: 'viewer-joined' }));
-                }
-
-                return;
-            }
-
-            // Offer from broadcaster to viewer
-            if (data.type === 'offer' && currentRoom) {
-                const viewer = rooms[currentRoom].viewers.find(v => v !== ws && v.readyState === WebSocket.OPEN);
-                viewer?.send(JSON.stringify({ type: 'offer', offer: data.offer }));
-            }
-
-            // Answer from viewer to broadcaster
-            if (data.type === 'answer' && currentRoom) {
-                rooms[currentRoom].broadcaster?.send(JSON.stringify({ type: 'answer', answer: data.answer }));
-            }
-
-            // ICE Candidate
-            if (data.type === 'candidate') {
-                if (role === 'broadcaster') {
-                    rooms[currentRoom].viewers.forEach(v => v.send(JSON.stringify({ type: 'candidate', candidate: data.candidate })));
-                } else if (role === 'viewer') {
-                    rooms[currentRoom].broadcaster?.send(JSON.stringify({ type: 'candidate', candidate: data.candidate }));
-                }
-            }
-
-        } catch (err) {
-            console.error('Message parse error:', err);
+            default:
+                console.log('Unknown message type:', data.type);
         }
     });
 
     ws.on('close', () => {
-        if (currentRoom && rooms[currentRoom]) {
-            if (role === 'viewer') {
-                rooms[currentRoom].viewers = rooms[currentRoom].viewers.filter(v => v !== ws);
-            }
-            if (role === 'broadcaster') {
-                rooms[currentRoom].broadcaster = null;
-            }
+        if (!roomId) return;
+        if (isBroadcaster) {
+            console.log(`Broadcaster left room ${roomId}`);
+            rooms[roomId].broadcaster = null;
+        } else {
+            rooms[roomId].viewers = rooms[roomId].viewers.filter(v => v !== ws);
+            viewerMap.delete(ws);
+            console.log(`Viewer left room ${roomId}`);
         }
     });
 });
 
-console.log('Signaling server is running on ws://localhost:8080');
+console.log('Signaling server running on ws://localhost:8080');
