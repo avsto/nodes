@@ -1,5 +1,7 @@
 const express = require("express");
+
 const http = require("http");
+
 const { Server } = require("socket.io");
 
 const app = express();
@@ -18,23 +20,34 @@ io.on("connection", (socket) => {
 
   console.log("Connected:", socket.id);
 
-  // Admin Start Broadcast
+  // START BROADCAST
+
   socket.on("broadcaster", ({ roomId }) => {
 
     broadcasters[roomId] = socket.id;
 
     socket.join(roomId);
 
-    console.log("Broadcaster Started:", roomId);
+    console.log(
+      "Broadcaster Started:",
+      roomId
+    );
 
   });
 
-  // Listener Join Room
+  // VIEWER JOIN
+
   socket.on("viewer", ({ roomId }) => {
 
     socket.join(roomId);
 
-    const broadcasterId = broadcasters[roomId];
+    console.log(
+      "Viewer Joined:",
+      socket.id
+    );
+
+    const broadcasterId =
+      broadcasters[roomId];
 
     if (broadcasterId) {
 
@@ -42,12 +55,22 @@ io.on("connection", (socket) => {
         viewerId: socket.id,
       });
 
+    } else {
+
+      io.to(socket.id).emit(
+        "broadcast-not-found"
+      );
+
     }
 
   });
 
-  // Send Offer
-  socket.on("offer", ({ target, offer }) => {
+  // OFFER
+
+  socket.on("offer", ({
+    target,
+    offer,
+  }) => {
 
     io.to(target).emit("offer", {
       sender: socket.id,
@@ -56,8 +79,12 @@ io.on("connection", (socket) => {
 
   });
 
-  // Send Answer
-  socket.on("answer", ({ target, answer }) => {
+  // ANSWER
+
+  socket.on("answer", ({
+    target,
+    answer,
+  }) => {
 
     io.to(target).emit("answer", {
       sender: socket.id,
@@ -66,24 +93,61 @@ io.on("connection", (socket) => {
 
   });
 
-  // ICE Candidate
-  socket.on("candidate", ({ target, candidate }) => {
+  // ICE CANDIDATE
 
-    io.to(target).emit("candidate", {
-      sender: socket.id,
-      candidate,
-    });
+  socket.on("candidate", ({
+    target,
+    candidate,
+  }) => {
+
+    if (target) {
+
+      io.to(target).emit("candidate", {
+        sender: socket.id,
+        candidate,
+      });
+
+    }
 
   });
 
-  // Disconnect
+  // STOP BROADCAST
+
+  socket.on("stop-broadcast", ({
+    roomId,
+  }) => {
+
+    console.log(
+      "Broadcast Stopped:",
+      roomId
+    );
+
+    io.to(roomId).emit(
+      "broadcast-stopped"
+    );
+
+    delete broadcasters[roomId];
+
+  });
+
+  // DISCONNECT
+
   socket.on("disconnect", () => {
 
-    console.log("Disconnected:", socket.id);
+    console.log(
+      "Disconnected:",
+      socket.id
+    );
 
     for (let roomId in broadcasters) {
 
-      if (broadcasters[roomId] === socket.id) {
+      if (
+        broadcasters[roomId] === socket.id
+      ) {
+
+        io.to(roomId).emit(
+          "broadcast-stopped"
+        );
 
         delete broadcasters[roomId];
 
@@ -96,5 +160,9 @@ io.on("connection", (socket) => {
 });
 
 server.listen(5000, () => {
-  console.log("Server Running On Port 5000");
+
+  console.log(
+    "Server Running On Port 5000"
+  );
+
 });
