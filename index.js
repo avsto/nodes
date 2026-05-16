@@ -1,39 +1,100 @@
-const express = require('express');
-const http = require('http');
-const socketIo = require('socket.io');
-const cors = require('cors');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
 
 const app = express();
+
 const server = http.createServer(app);
-const io = socketIo(server, {
+
+const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST'],
+    origin: "*",
   },
 });
 
-app.use(cors());
-app.use(express.json());
+const broadcasters = {};
 
-io.on('connection', (socket) => {
-  let room_id;
+io.on("connection", (socket) => {
 
-  socket.on('joinRoom', (data) => {
-    room_id = data.room_id;
-    socket.join(room_id);
-    console.log(`Socket ${socket.id} joined room ${room_id}`);
+  console.log("Connected:", socket.id);
+
+  // Admin Start Broadcast
+  socket.on("broadcaster", ({ roomId }) => {
+
+    broadcasters[roomId] = socket.id;
+
+    socket.join(roomId);
+
+    console.log("Broadcaster Started:", roomId);
+
   });
 
-  socket.on('message', (message) => {
-    io.to(room_id).emit('message', message);
+  // Listener Join Room
+  socket.on("viewer", ({ roomId }) => {
+
+    socket.join(roomId);
+
+    const broadcasterId = broadcasters[roomId];
+
+    if (broadcasterId) {
+
+      io.to(broadcasterId).emit("viewer", {
+        viewerId: socket.id,
+      });
+
+    }
+
   });
 
-  socket.on('disconnect', () => {
-    console.log(`Socket ${socket.id} disconnected`);
+  // Send Offer
+  socket.on("offer", ({ target, offer }) => {
+
+    io.to(target).emit("offer", {
+      sender: socket.id,
+      offer,
+    });
+
   });
+
+  // Send Answer
+  socket.on("answer", ({ target, answer }) => {
+
+    io.to(target).emit("answer", {
+      sender: socket.id,
+      answer,
+    });
+
+  });
+
+  // ICE Candidate
+  socket.on("candidate", ({ target, candidate }) => {
+
+    io.to(target).emit("candidate", {
+      sender: socket.id,
+      candidate,
+    });
+
+  });
+
+  // Disconnect
+  socket.on("disconnect", () => {
+
+    console.log("Disconnected:", socket.id);
+
+    for (let roomId in broadcasters) {
+
+      if (broadcasters[roomId] === socket.id) {
+
+        delete broadcasters[roomId];
+
+      }
+
+    }
+
+  });
+
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(5000, () => {
+  console.log("Server Running On Port 5000");
 });
